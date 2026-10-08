@@ -23,6 +23,10 @@ Hot reload doesn't re-instantiate a running widget, so code changes always need 
 
 herdr agents that need attention (blocked or done).
 
+![gil.herdr in the bar: blocked, done only, idle](screenshots/herdr-bar.png)
+
+![gil.herdr overlay](screenshots/herdr-overlay.png)
+
 - **Bar widget**: herdr's sidebar dot with the count inside, red if any agent is blocked, teal if only done, a hollow ring in the bar foreground at 0. The panel lists the agents (`j`/`k`, Enter, or click) and jumps to the pane: `herdr agent focus`, then raises the terminal window whose process tree holds the herdr client for that server.
 - **Overlay**: the same list centered at the Omarchy menu's size (its `[menu]` surface, row, and font tokens). Up/Down or `j`/`k`, Enter jumps, Esc closes. `omarchy-shell shell toggle gil.herdr` opens it.
 - **Service**: `Service.qml` runs a single `herdr-attention watch`; the bar widget and the overlay read from it (`shell.serviceFor("gil.herdr")`).
@@ -47,6 +51,8 @@ Optional Omarchy menu entry (SUPER+SPACE, search "herdr agents"): a `trigger.her
 
 `bar/modules/sysmeter.qml` and `bar/scripts/sysmeter`: three tiny vertical meters for CPU, GPU and memory (C, G, M). Memory is (MemTotal - MemAvailable) / MemTotal. Add it to a bar section in `~/.config/omarchy/shell.json` as `{ "id": "sysmeter", "type": "qml" }`.
 
+![sysmeter](screenshots/sysmeter.png)
+
 ## Cloned plugins
 
 Made with `omarchy plugin clone <id>`, which copies a packaged widget into `~/.config/omarchy/plugins/<user>.<name>/` and points the bar at the copy. A clone no longer gets upstream fixes, so they're merged by hand. The originals are Omarchy's (MIT, Copyright (c) David Heinemeier Hansson / 37signals).
@@ -57,6 +63,14 @@ Made with `omarchy plugin clone <id>`, which copies a packaged widget into `~/.c
 | `gil.tray` | `omarchy.tray` | `shell/plugins/bar/widgets/Tray.qml`, `TrayModel.js` (unchanged) | 4.0.4-1 | New `maxVisible` setting (default 6, 0 = unlimited): pinned icons, then the rest in tray order, show inline up to that count; only the overflow goes behind the caret, and the caret is hidden when nothing overflows. Middle-click on an icon opens the Pin/Hide popup while the caret is hidden. `moduleName` is `gil.tray`, and `persistTrayState` keeps the entry's other settings (so pin/hide doesn't drop `maxVisible`). |
 
 To use a clone, point the bar entry in `~/.config/omarchy/shell.json` at its id (`gil.workspaces`, `gil.tray`) instead of the `omarchy.*` one.
+
+`gil.workspaces`:
+
+![gil.workspaces](screenshots/workspaces.png)
+
+`gil.tray`:
+
+![gil.tray](screenshots/tray.png)
 
 ### Merging an Omarchy update
 
