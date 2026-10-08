@@ -40,8 +40,10 @@ Item {
   readonly property int listHeight: agents.length === 0 ? rowHeight
     : agents.length * rowHeight + (agents.length - 1) * rowSpacing
   readonly property int errorsHeight: errorColumn.visible ? errorColumn.implicitHeight + contentSpacing : 0
-  property int cardHeight: Math.min(contentMargin * 2 + headerHeight + contentSpacing + listHeight + errorsHeight,
-                                    Math.round(panel.height * 0.8))
+  // The card's insets include its border, not just the padding; leaving the
+  // border out makes the list a few pixels short, so it scrolls on every move.
+  property int cardHeight: Math.min(card.contentTopInset + card.contentBottomInset + headerHeight + contentSpacing
+                                    + listHeight + errorsHeight, Math.round(panel.height * 0.8))
 
   function lookupService() {
     if (!service && shell && typeof shell.serviceFor === "function") service = shell.serviceFor("gil.herdr")
@@ -66,6 +68,7 @@ Item {
   function move(delta) {
     if (agents.length === 0) return
     cursor = Math.max(0, Math.min(agents.length - 1, cursor + delta))
+    // Scrolls only when the list is taller than the card allows.
     list.positionViewAtIndex(cursor, ListView.Contain)
   }
 
@@ -205,7 +208,6 @@ Item {
             clip: true
             spacing: root.rowSpacing
             boundsBehavior: Flickable.StopAtBounds
-            currentIndex: root.cursor
 
             delegate: BorderSurface {
               id: row
