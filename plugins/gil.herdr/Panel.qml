@@ -1,44 +1,47 @@
 import QtQuick
 import Quickshell
-import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
 // herdr agents that need attention. The bar shows herdr's sidebar dot (red =
 // blocked, teal = done) with the count inside; the panel lists the agents and
 // a click jumps to the agent's pane in the terminal attached to its herdr
-// server, local or `herdr --remote`. Data and focusing live in herdr-attention.
+// server, local or `herdr --remote`. Data and focusing live in Service.qml and herdr-attention.
 Panel {
   id: root
   moduleName: "gil.herdr"
   ipcTarget: "gil.herdr"
 
-  // herdr's gruvbox palette (src/app/state.rs) and its status_color mapping
-  // (src/client/shell.rs): blocked = red, done = teal. With nothing to show
-  // the ring takes the bar's foreground, like the other bar icons.
-  readonly property color blockedColor: "#fb4934"
-  readonly property color doneColor: "#8ec07c"
-  readonly property color dotText: "#282828"
-
-  readonly property string script: Qt.resolvedUrl("herdr-attention").toString().replace("file://", "")
-  property var agents: []
-  property var errors: []
-  property int cursor: -1
-  readonly property int blockedCount: agents.filter(a => a.status === "blocked").length
-
-  function statusColor(status) { return status === "blocked" ? blockedColor : doneColor }
-
-  function jump(agent) {
-    if (!agent) return
-    Quickshell.execDetached([script, "focus", agent.host, agent.pane])
-    close()
+  // The watcher lives in Service.qml, shared with the overlay. The service may
+  // load after the widget, so look it up until it is there.
+  property var service: null
+  Timer {
+    interval: 200
+    repeat: true
+    running: root.service === null
+    triggeredOnStart: true
+    onTriggered: {
+      var shell = root.bar ? root.bar.shell : null
+      if (shell && typeof shell.serviceFor === "function") root.service = shell.serviceFor("gil.herdr")
+    }
   }
 
-  function location(agent) {
-    var parts = [agent.hostLabel]
-    if (agent.workspace) parts.push(agent.workspace)
-    if (agent.tab) parts.push(agent.tab)
-    return parts.join(" / ")
+  // With nothing to show the ring takes the bar's foreground, like the other bar icons.
+  readonly property color blockedColor: service ? service.blockedColor : "red"
+  readonly property color doneColor: service ? service.doneColor : "teal"
+  readonly property color dotText: service ? service.dotText : "black"
+  readonly property var agents: service ? service.agents : []
+  readonly property var errors: service ? service.errors : []
+  readonly property int blockedCount: service ? service.blockedCount : 0
+  property int cursor: -1
+
+  function statusColor(status) { return service ? service.statusColor(status) : doneColor }
+  function location(agent) { return service ? service.location(agent) : "" }
+
+  function jump(agent) {
+    if (!agent || !service) return
+    service.jump(agent)
+    close()
   }
 
   onOpenedChanged: if (opened) cursor = agents.length > 0 ? 0 : -1
@@ -46,48 +49,6 @@ Panel {
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
-
-  Process {
-    id: watcher
-    running: true
-    command: [root.script, "watch"]
-    stdout: SplitParser {
-      onRead: function(line) {
-        try {
-          var data = JSON.parse(line)
-          root.agents = data.agents || []
-          root.errors = data.errors || []
-        } catch (e) {}
-      }
-    }
-    onExited: restart.start()
-  }
-
-  Timer { id: restart; interval: 5000; onTriggered: watcher.running = true }
-
-  // herdr's dot: filled for blocked/done, a hollow ring when nothing needs attention.
-  component Dot: Rectangle {
-    property color dotColor
-    property int count: 0
-    property bool showCount: true
-    property real size: 16
-    width: size
-    height: size
-    radius: size / 2
-    color: count > 0 ? dotColor : "transparent"
-    border.width: count > 0 ? 0 : 1.5
-    border.color: dotColor
-
-    Text {
-      anchors.centerIn: parent
-      visible: parent.showCount && parent.count > 0
-      text: parent.count > 99 ? "99" : String(parent.count)
-      color: root.dotText
-      font.family: root.bar ? root.bar.fontFamily : Style.font.family
-      font.pixelSize: Math.round(parent.size * (parent.count > 9 ? 0.55 : 0.7))
-      font.bold: true
-    }
-  }
 
   BarIconButton {
     id: button
@@ -103,6 +64,8 @@ Panel {
         Dot {
           anchors.centerIn: parent
           count: root.agents.length
+          textColor: root.dotText
+          fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
           dotColor: root.agents.length === 0 ? root.barForeground
             : (root.blockedCount > 0 ? root.blockedColor : root.doneColor)
         }
@@ -185,6 +148,7 @@ Panel {
                   size: 10
                   count: 1
                   showCount: false
+                  fontFamily: root.bar.fontFamily
                   dotColor: root.statusColor(row.modelData.status)
                 }
 
