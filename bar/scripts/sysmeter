@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+# Prints "<cpu%> <gpu%> <mem%>" every INTERVAL seconds for the bar's sysmeter widget.
+# GPU busy comes from DRM fdinfo engine counters of this user's processes
+# (compositor + apps), so it needs no root. Reported value is the busiest engine.
+import glob, os, re, sys, time
+
+INTERVAL = float(sys.argv[1]) if len(sys.argv) > 1 else 2.0
+ENGINE = re.compile(r"drm-engine-([a-z-]+):\s+(\d+) ns")
+CAPACITY = re.compile(r"drm-engine-capacity-([a-z-]+):\s+(\d+)")
+
+def cpu_times():
+    with open("/proc/stat") as f:
+        v = list(map(int, f.readline().split()[1:]))
+    idle = v[3] + v[4]
+    return sum(v) - idle, sum(v)
+
+def mem_used():
+    info = {}
+    with open("/proc/meminfo") as f:
+        for line in f:
+            k, v = line.split(":", 1)
+            info[k] = int(v.split()[0])
+    return 100 * (info["MemTotal"] - info["MemAvailable"]) / info["MemTotal"]
+
+def gpu_engines():
+    clients, capacity = {}, {}
+    for path in glob.glob("/proc/[0-9]*/fdinfo/*"):
+        try:
+            with open(path) as f:
+                text = f.read()
+        except OSError:
+            continue
+        if "drm-client-id" not in text:
+            continue
+        cid = re.search(r"drm-client-id:\s+(\d+)", text).group(1)
+        pdev = re.search(r"drm-pdev:\s+(\S+)", text)
+        key = (pdev.group(1) if pdev else "", cid)
+        if key in clients:
+            continue
+        clients[key] = {e: int(ns) for e, ns in ENGINE.findall(text)}
+        for e, n in CAPACITY.findall(text):
+            capacity[e] = int(n)
+    return clients, capacity
+
+prev_cpu = cpu_times()
+prev_gpu, _ = gpu_engines()
+prev_t = time.monotonic()
+while True:
+    time.sleep(INTERVAL)
+    cur_cpu = cpu_times()
+    cur_gpu, cap = gpu_engines()
+    now = time.monotonic()
+    dt_ns = (now - prev_t) * 1e9
+
+    busy, total = cur_cpu[0] - prev_cpu[0], cur_cpu[1] - prev_cpu[1]
+    cpu = 100 * busy / total if total else 0
+
+    per_engine = {}
+    for key, engines in cur_gpu.items():
+        old = prev_gpu.get(key)
+        if old is None:
+            continue
+        for e, ns in engines.items():
+            per_engine[e] = per_engine.get(e, 0) + max(0, ns - old.get(e, ns))
+    gpu = max((100 * d / (dt_ns * cap.get(e, 1)) for e, d in per_engine.items()), default=0)
+
+    print(f"{round(cpu)} {min(100, round(gpu))} {round(mem_used())}", flush=True)
+    prev_cpu, prev_gpu, prev_t = cur_cpu, cur_gpu, now
