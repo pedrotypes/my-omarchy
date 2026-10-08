@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "gil.herdr",
+  "name": "herdr attention",
+  "version": "1.0.0",
+  "author": "gil",
+  "description": "herdr agents that are blocked or done, with a jump to their pane",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "herdr attention",
+    "description": "Count of herdr agents that need attention; the panel lists them and jumps to one",
+    "category": "AI",
+    "allowMultiple": false
+  }
+}

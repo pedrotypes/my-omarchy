@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+# herdr agents that need attention (blocked or done), for the gil.herdr bar widget.
+#
+#   herdr-attention watch            one JSON line per change: {"agents": [...], "errors": [...]}
+#   herdr-attention focus HOST PANE  focus that agent's pane in herdr, raise the terminal attached to it
+#
+# HOST is "local" for this machine's herdr server, or the target of a running
+# `herdr --remote <target>` client. Local state is polled; each remote is one
+# long-lived ssh that streams a snapshot every couple of seconds, so a poll
+# never pays for an ssh handshake.
+import json, os, socket, subprocess, sys, threading, time
+
+POLL = 1.5
+REMOTE_POLL = 2
+RESCAN = 10
+ATTENTION = ("blocked", "done")
+
+lock = threading.Lock()
+changed = threading.Event()
+snapshots = {}   # host -> herdr api snapshot (or None)
+errors = {}      # host -> last error text
+
+
+def herdr_processes():
+    """(pid, argv) of every herdr process of this user."""
+    out = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                argv = f.read().split(b"\0")[:-1]
+        except OSError:
+            continue
+        if argv and os.path.basename(argv[0]) == b"herdr":
+            out.append((int(pid), [a.decode(errors="replace") for a in argv]))
+    return out
+
+
+def remote_target(argv):
+    if "--remote" in argv:
+        i = argv.index("--remote")
+        if i + 1 < len(argv):
+            return argv[i + 1]
+    return None
+
+
+def is_local_client(argv):
+    # `herdr`, `herdr --session x`, `herdr session attach x`; not the server, the
+    # remote-attach helper, or one-shot CLI calls.
+    args = argv[1:]
+    if remote_target(argv):
+        return False
+    if not args or args[0] == "--session":
+        return True
+    return args[:2] == ["session", "attach"]
+
+
+def remote_targets():
+    return sorted({t for _, argv in herdr_processes() if (t := remote_target(argv))})
+
+
+def host_label(host):
+    return socket.gethostname() if host == "local" else host.split("@")[-1]
+
+
+def set_state(host, snap, err):
+    with lock:
+        if snap is not None or err is not None or host in snapshots:
+            snapshots[host] = snap
+        if err:
+            errors[host] = err
+        else:
+            errors.pop(host, None)
+    changed.set()
+
+
+def watch_local():
+    while True:
+        try:
+            r = subprocess.run(["herdr", "api", "snapshot"], capture_output=True, text=True, timeout=10)
+            if r.returncode == 0:
+                set_state("local", json.loads(r.stdout)["result"]["snapshot"], None)
+            else:
+                # No server running is not an error worth showing: just no agents.
+                set_state("local", None, None)
+        except (subprocess.SubprocessError, ValueError, KeyError) as e:
+            set_state("local", None, f"local: {e}")
+        time.sleep(POLL)
+
+
+def watch_remote(target, alive):
+    loop = f"while :; do herdr api snapshot | tr -d '\\n'; echo; sleep {REMOTE_POLL}; done"
+    while alive.is_set():
+        try:
+            p = subprocess.Popen(
+                ["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ConnectTimeout=10", target, loop],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, text=True)
+            alive.proc = p
+            for line in p.stdout:
+                if not alive.is_set():
+                    break
+                try:
+                    set_state(target, json.loads(line)["result"]["snapshot"], None)
+                except (ValueError, KeyError):
+                    set_state(target, None, None)
+            p.kill()
+            p.wait()
+        except OSError as e:
+            set_state(target, None, f"{host_label(target)}: {e}")
+        if alive.is_set():
+            set_state(target, None, f"{host_label(target)}: ssh disconnected, retrying")
+            time.sleep(5)
+
+
+def manage_remotes():
+    running = {}
+    while True:
+        wanted = set(remote_targets())
+        for t in wanted - running.keys():
+            alive = threading.Event()
+            alive.set()
+            alive.proc = None
+            threading.Thread(target=watch_remote, args=(t, alive), daemon=True).start()
+            running[t] = alive
+        for t in running.keys() - wanted:
+            alive = running.pop(t)
+            alive.clear()
+            if alive.proc:
+                alive.proc.kill()
+            with lock:
+                snapshots.pop(t, None)
+                errors.pop(t, None)
+            changed.set()
+        time.sleep(RESCAN)
+
+
+def attention_list():
+    agents = []
+    with lock:
+        items = list(snapshots.items())
+        errs = sorted(errors.values())
+    for host, snap in items:
+        if not snap:
+            continue
+        workspaces = {w["workspace_id"]: w for w in snap.get("workspaces", [])}
+        tabs = {t["tab_id"]: t for t in snap.get("tabs", [])}
+        for a in snap.get("agents", []):
+            if a.get("agent_status") not in ATTENTION:
+                continue
+            ws = workspaces.get(a.get("workspace_id"), {})
+            tab = tabs.get(a.get("tab_id"), {})
+            agents.append({
+                "host": host,
+                "hostLabel": host_label(host),
+                "pane": a["pane_id"],
+                "status": a["agent_status"],
+                "agent": a.get("agent", ""),
+                "title": a.get("name") or a.get("terminal_title_stripped") or a.get("agent", ""),
+                "workspace": ws.get("label", ""),
+                "workspaceNumber": ws.get("number", 0),
+                "tab": tab.get("label", ""),
+                "tabNumber": tab.get("number", 0),
+                "cwd": a.get("cwd", ""),
+            })
+    agents.sort(key=lambda a: (a["status"] != "blocked", a["host"] != "local", a["hostLabel"],
+                               a["workspaceNumber"], a["tabNumber"], a["pane"]))
+    return {"agents": agents, "errors": errs}
+
+
+def watch():
+    threading.Thread(target=watch_local, daemon=True).start()
+    threading.Thread(target=manage_remotes, daemon=True).start()
+    last = None
+    while True:
+        changed.wait()
+        changed.clear()
+        out = json.dumps(attention_list(), separators=(",", ":"))
+        if out != last:
+            print(out, flush=True)
+            last = out
+
+
+def parent_pid(pid):
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return int(f.read().rsplit(")", 1)[1].split()[1])
+    except (OSError, IndexError, ValueError):
+        return 0
+
+
+def terminal_window(host):
+    """Address of the Hyprland window whose process tree holds the herdr client for HOST."""
+    clients = json.loads(subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True).stdout)
+    by_pid = {c["pid"]: c for c in clients}
+    for pid, argv in herdr_processes():
+        if (remote_target(argv) == host) if host != "local" else is_local_client(argv):
+            p = pid
+            while p > 1:
+                if p in by_pid:
+                    return by_pid[p]["address"]
+                p = parent_pid(p)
+    return None
+
+
+def focus(host, pane):
+    herdr_focus = ["herdr", "agent", "focus", pane]
+    if host != "local":
+        herdr_focus = ["ssh", "-o", "BatchMode=yes", host, f"herdr agent focus {pane}"]
+    window = terminal_window(host)
+    if window:
+        # Raise the window first: the remote focus pays an ssh handshake.
+        # Hyprland 0.56 dispatches Lua; the old form is the fallback, as in omarchy-launch-or-focus.
+        r = subprocess.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{window}" }})'],
+                           capture_output=True, text=True)
+        if r.returncode != 0 or "rror" in r.stdout:
+            subprocess.run(["hyprctl", "dispatch", "focuswindow", f"address:{window}"], capture_output=True)
+        subprocess.run(herdr_focus, capture_output=True)
+    else:
+        # No terminal attached to this server: focus the pane, then attach one, which opens on it.
+        subprocess.run(herdr_focus, capture_output=True)
+        attach = ["herdr"] if host == "local" else ["herdr", "--remote", host]
+        subprocess.Popen(["uwsm-app", "--", "xdg-terminal-exec"] + attach, start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["watch"]:
+        watch()
+    elif sys.argv[1:2] == ["focus"] and len(sys.argv) == 4:
+        focus(sys.argv[2], sys.argv[3])
+    else:
+        sys.exit(__doc__ or "usage: herdr-attention watch | focus HOST PANE")
