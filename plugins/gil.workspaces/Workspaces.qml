@@ -10,9 +10,22 @@ BarWidget {
   moduleName: "omarchy.workspaces"
 
   // One bar exists per monitor: mark the workspace shown on this bar's
-  // monitor, not the globally focused one.
+  // monitor, not the globally focused one. Looked up through
+  // Hyprland.monitors so the binding re-evaluates once the monitor list
+  // is loaded; monitorFor() is not reactive and stays null for a bar
+  // created before it (laptop screen alone at login).
   readonly property var barScreen: QsWindow.window ? QsWindow.window.screen : null
-  readonly property var barMonitor: barScreen ? Hyprland.monitorFor(barScreen) : null
+  readonly property var barMonitor: {
+    if (!barScreen) return null
+    var monitors = Hyprland.monitors.values
+    for (var i = 0; i < monitors.length; i++) {
+      if (monitors[i].name === barScreen.name) return monitors[i]
+    }
+    return null
+  }
+  readonly property int activeId: barMonitor && barMonitor.activeWorkspace
+    ? barMonitor.activeWorkspace.id
+    : (Hyprland.focusedWorkspace ? Hyprland.focusedWorkspace.id : -1)
 
   function workspaceById(id) {
     var values = Hyprland.workspaces.values
@@ -62,7 +75,7 @@ BarWidget {
 
         readonly property var workspace: root.workspaceById(modelData)
         readonly property bool occupied: workspace !== null && workspace.toplevels.values.length > 0
-        readonly property bool focused: root.barMonitor !== null && root.barMonitor.activeWorkspace !== null && root.barMonitor.activeWorkspace.id === modelData
+        readonly property bool focused: root.activeId === modelData
 
         bar: root.bar
         text: focused ? "\uDB85\uDCFB" : (modelData === 10 ? "0" : String(modelData))
