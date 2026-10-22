@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "gil.notification-history",
+  "name": "Notification history",
+  "version": "1.0.0",
+  "author": "gil",
+  "description": "Bar button that shows the recent notifications again, and hides them",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Button.qml"
+  },
+  "barWidget": {
+    "displayName": "Notification history",
+    "description": "Left-click shows or hides the recent notifications, right-click hides them",
+    "category": "System",
+    "allowMultiple": false
+  }
+}

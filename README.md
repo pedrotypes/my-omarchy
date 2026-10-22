@@ -53,6 +53,17 @@ Optional Omarchy menu entry (SUPER+SPACE, search "herdr agents"): a `trigger.her
 
 ![sysmeter](screenshots/sysmeter.png)
 
+### gil.notification-history
+
+A bell in the bar for notifications you missed. Left-click shows the last ten notifications again, as normal pop-ups (`omarchy-shell notifications showHistory`, the same as SUPER+SHIFT+ALT+comma). Left-click again while they're up hides them all (`dismissAll`); right-click always hides them. Plugins can't see the pop-up stack, so the button counts the history as shown from the click until the replayed pop-ups would have expired (8 s, Omarchy's normal toast duration) or until it dismisses them. The bell is highlighted while they're shown.
+
+Setup after copying, e.g. at the far right:
+
+```bash
+omarchy plugin enable gil.notification-history --section right
+omarchy bar move gil.notification-history --after omarchy.power
+```
+
 ## Cloned plugins
 
 Made with `omarchy plugin clone <id>`, which copies a packaged widget into `~/.config/omarchy/plugins/<user>.<name>/` and points the bar at the copy. A clone no longer gets upstream fixes, so they're merged by hand. The originals are Omarchy's (MIT, Copyright (c) David Heinemeier Hansson / 37signals).
