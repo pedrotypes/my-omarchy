@@ -163,7 +163,7 @@ Item {
             anchors.left: parent.left
             anchors.right: hint.left
             anchors.verticalCenter: parent.verticalCenter
-            text: "Herdr agents needing attention"
+            text: "Herdr agents"
             color: root.foreground
             opacity: 0.58
             font.family: root.fontFamily
@@ -194,7 +194,7 @@ Item {
             anchors.leftMargin: Style.space(18)
             height: root.rowHeight
             verticalAlignment: Text.AlignVCenter
-            text: "Nothing is blocked or done."
+            text: "Nothing is blocked, done, or working."
             color: root.foreground
             opacity: 0.58
             font.family: root.fontFamily

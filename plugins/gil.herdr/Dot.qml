@@ -1,6 +1,6 @@
 import QtQuick
 
-// herdr's sidebar status dot: filled for blocked/done (optionally with a count
+// herdr's sidebar status dot: filled for blocked/done/working (optionally with a count
 // inside), a hollow ring when there is nothing to count.
 Rectangle {
   id: dot

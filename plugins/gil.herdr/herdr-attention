@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# herdr agents that need attention (blocked or done), for the gil.herdr bar widget.
+# herdr agents that need attention (blocked or done) or are working, for the gil.herdr bar widget.
 #
 #   herdr-attention watch            one JSON line per change: {"agents": [...], "errors": [...]}
 #   herdr-attention focus HOST PANE  focus that agent's pane in herdr, raise the terminal attached to it
@@ -7,13 +7,16 @@
 # HOST is "local" for this machine's herdr server, or the target of a running
 # `herdr --remote <target>` client. Local state is polled; each remote is one
 # long-lived ssh that streams a snapshot every couple of seconds, so a poll
-# never pays for an ssh handshake.
+# never pays for an ssh handshake. A stream that goes quiet (dead connection
+# after a suspend or network change, hung remote) is dropped and reconnected
+# rather than left showing its last snapshot.
 import json, os, socket, subprocess, sys, threading, time
 
 POLL = 1.5
 REMOTE_POLL = 2
+STALE = 10       # seconds without a remote snapshot before it is dropped and the ssh restarted
 RESCAN = 10
-ATTENTION = ("blocked", "done")
+SHOWN = ("blocked", "done", "working")   # in list order: attention first
 
 lock = threading.Lock()
 changed = threading.Event()
@@ -89,6 +92,11 @@ def watch_local():
         time.sleep(POLL)
 
 
+def now():
+    # Counts time spent suspended, so a stream that slept with the laptop is stale on resume.
+    return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+
 def watch_remote(target, alive):
     loop = f"while :; do herdr api snapshot | tr -d '\\n'; echo; sleep {REMOTE_POLL}; done"
     while alive.is_set():
@@ -97,9 +105,20 @@ def watch_remote(target, alive):
                 ["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ConnectTimeout=10", target, loop],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, text=True)
             alive.proc = p
+            last = [now()]
+
+            def watchdog():
+                while p.poll() is None:
+                    if now() - last[0] > STALE:
+                        p.kill()
+                        return
+                    time.sleep(1)
+
+            threading.Thread(target=watchdog, daemon=True).start()
             for line in p.stdout:
                 if not alive.is_set():
                     break
+                last[0] = now()
                 try:
                     set_state(target, json.loads(line)["result"]["snapshot"], None)
                 except (ValueError, KeyError):
@@ -146,7 +165,7 @@ def attention_list():
         workspaces = {w["workspace_id"]: w for w in snap.get("workspaces", [])}
         tabs = {t["tab_id"]: t for t in snap.get("tabs", [])}
         for a in snap.get("agents", []):
-            if a.get("agent_status") not in ATTENTION:
+            if a.get("agent_status") not in SHOWN:
                 continue
             ws = workspaces.get(a.get("workspace_id"), {})
             tab = tabs.get(a.get("tab_id"), {})
@@ -163,7 +182,7 @@ def attention_list():
                 "tabNumber": tab.get("number", 0),
                 "cwd": a.get("cwd", ""),
             })
-    agents.sort(key=lambda a: (a["status"] != "blocked", a["host"] != "local", a["hostLabel"],
+    agents.sort(key=lambda a: (SHOWN.index(a["status"]), a["host"] != "local", a["hostLabel"],
                                a["workspaceNumber"], a["tabNumber"], a["pane"]))
     return {"agents": agents, "errors": errs}
 

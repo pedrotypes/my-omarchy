@@ -3,8 +3,9 @@ import Quickshell
 import qs.Commons
 import qs.Ui
 
-// herdr agents that need attention. The bar shows herdr's sidebar dot (red =
-// blocked, teal = done) with the count inside; the panel lists the agents and
+// herdr agents that need attention or are working. The bar shows herdr's sidebar
+// dot (red = blocked, teal = done, yellow = only working) with the count of all
+// of them inside; the panel lists them, attention first, and
 // a click jumps to the agent's pane in the terminal attached to its herdr
 // server, local or `herdr --remote`. Data and focusing live in Service.qml and herdr-attention.
 Panel {
@@ -29,10 +30,13 @@ Panel {
   // With nothing to show the ring takes the bar's foreground, like the other bar icons.
   readonly property color blockedColor: service ? service.blockedColor : "red"
   readonly property color doneColor: service ? service.doneColor : "teal"
+  readonly property color workingColor: service ? service.workingColor : "yellow"
   readonly property color dotText: service ? service.dotText : "black"
   readonly property var agents: service ? service.agents : []
   readonly property var errors: service ? service.errors : []
   readonly property int blockedCount: service ? service.blockedCount : 0
+  readonly property int workingCount: service ? service.workingCount : 0
+  readonly property int attentionCount: service ? service.attentionCount : 0
   property int cursor: -1
 
   function statusColor(status) { return service ? service.statusColor(status) : doneColor }
@@ -56,9 +60,15 @@ Panel {
     bar: root.bar
     active: root.opened
     useActiveColor: false
-    tooltipText: root.agents.length === 0 ? "No herdr agents need attention"
-      : root.agents.length + " herdr agent" + (root.agents.length === 1 ? "" : "s") + " need attention"
-        + (root.blockedCount > 0 ? " (" + root.blockedCount + " blocked)" : "")
+    tooltipText: {
+      if (root.agents.length === 0) return "No herdr agents need attention or are working"
+      var parts = []
+      if (root.attentionCount > 0)
+        parts.push(root.attentionCount + " need" + (root.attentionCount === 1 ? "s" : "") + " attention"
+          + (root.blockedCount > 0 ? " (" + root.blockedCount + " blocked)" : ""))
+      if (root.workingCount > 0) parts.push(root.workingCount + " working")
+      return "herdr agents: " + parts.join(", ")
+    }
     iconComponent: Component {
       Item {
         Dot {
@@ -67,7 +77,8 @@ Panel {
           textColor: root.dotText
           fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
           dotColor: root.agents.length === 0 ? root.barForeground
-            : (root.blockedCount > 0 ? root.blockedColor : root.doneColor)
+            : root.blockedCount > 0 ? root.blockedColor
+            : root.attentionCount > 0 ? root.doneColor : root.workingColor
         }
       }
     }
@@ -103,14 +114,14 @@ Panel {
         spacing: Style.space(10)
 
         PanelSectionHeader {
-          text: "HERDR AGENTS NEEDING ATTENTION"
+          text: "HERDR AGENTS"
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
         }
 
         Text {
           visible: root.agents.length === 0
-          text: "Nothing is blocked or done."
+          text: "Nothing is blocked, done, or working."
           color: root.bar.foreground
           opacity: 0.6
           font.family: root.bar.fontFamily

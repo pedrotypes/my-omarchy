@@ -21,17 +21,17 @@ Hot reload doesn't re-instantiate a running widget, so code changes always need 
 
 ### gil.herdr
 
-herdr agents that need attention (blocked or done).
+herdr agents that need attention (blocked or done) or are working.
 
 ![gil.herdr in the bar: blocked, done only, idle](screenshots/herdr-bar.png)
 
 ![gil.herdr overlay](screenshots/herdr-overlay.png)
 
-- **Bar widget**: herdr's sidebar dot with the count inside, red if any agent is blocked, teal if only done, a hollow ring in the bar foreground at 0. The panel lists the agents (`j`/`k`, Enter, or click) and jumps to the pane: `herdr agent focus`, then raises the terminal window whose process tree holds the herdr client for that server.
+- **Bar widget**: herdr's sidebar dot with the count of agents needing attention plus working ones inside: red if any agent is blocked, else teal if any is done, else yellow if only working, a hollow ring in the bar foreground at 0. The panel lists the agents, blocked then done then working (`j`/`k`, Enter, or click) and jumps to the pane: `herdr agent focus`, then raises the terminal window whose process tree holds the herdr client for that server.
 - **Overlay**: the same list centered at the Omarchy menu's size (its `[menu]` surface, row, and font tokens). Up/Down or `j`/`k`, Enter jumps, Esc closes. `omarchy-shell shell toggle gil.herdr` opens it.
 - **Service**: `Service.qml` runs a single `herdr-attention watch`; the bar widget and the overlay read from it (`shell.serviceFor("gil.herdr")`).
 
-It covers the local herdr server and every running `herdr --remote <target>` client, each over one long-lived ssh that streams `herdr api snapshot`, so a poll never pays for an ssh handshake. Colors are herdr's gruvbox palette, hardcoded. Window focus uses the Lua `hl.dsp.focus` dispatch (Hyprland 0.56), falling back to `focuswindow`. It's a plugin rather than a `qml` module so it can use the shared panel; `keepLoaded` keeps the service running.
+It covers the local herdr server and every running `herdr --remote <target>` client, each over one long-lived ssh that streams `herdr api snapshot`, so a poll never pays for an ssh handshake. A stream with no snapshot for 10s (counting time suspended) is dropped and reconnected, so a dead connection never leaves stale agents in the bar. Colors are herdr's gruvbox palette, hardcoded. Window focus uses the Lua `hl.dsp.focus` dispatch (Hyprland 0.56), falling back to `focuswindow`. It's a plugin rather than a `qml` module so it can use the shared panel; `keepLoaded` keeps the service running.
 
 Setup after copying:
 

@@ -11,17 +11,23 @@ Item {
   property var manifest: null
 
   // herdr's gruvbox palette (src/app/state.rs) and its status_color mapping
-  // (src/client/shell.rs): blocked = red, done = teal.
+  // (src/client/shell.rs): blocked = red, done = teal. Working is gruvbox yellow.
   readonly property color blockedColor: "#fb4934"
   readonly property color doneColor: "#8ec07c"
+  readonly property color workingColor: "#fabd2f"
   readonly property color dotText: "#282828"
 
   readonly property string script: Qt.resolvedUrl("herdr-attention").toString().replace("file://", "")
   property var agents: []
   property var errors: []
+  // agents is attention (blocked, done) first, then working.
   readonly property int blockedCount: agents.filter(a => a.status === "blocked").length
+  readonly property int workingCount: agents.filter(a => a.status === "working").length
+  readonly property int attentionCount: agents.length - workingCount
 
-  function statusColor(status) { return status === "blocked" ? blockedColor : doneColor }
+  function statusColor(status) {
+    return status === "blocked" ? blockedColor : status === "working" ? workingColor : doneColor
+  }
 
   function location(agent) {
     var parts = [agent.hostLabel]
