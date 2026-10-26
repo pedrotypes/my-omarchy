@@ -10,6 +10,14 @@
 # never pays for an ssh handshake. A stream that goes quiet (dead connection
 # after a suspend or network change, hung remote) is dropped and reconnected
 # rather than left showing its last snapshot.
+#
+# herdr's API reports `done` until an explicit `agent focus` marks it seen,
+# while each TUI client computes its own Done badges in memory and doesn't
+# expose them. So this follows the client's rules (src/client/shell/
+# endpoint_agent_state.rs): a client that attaches takes every existing
+# completion as viewed, and while attached, a completion is viewed once its
+# pane is on screen (the focused tab) in the focused terminal window. Clients
+# seen and completions viewed are kept in $XDG_STATE_HOME/gil.herdr/viewed.json.
 import json, os, socket, subprocess, sys, threading, time
 
 POLL = 1.5
@@ -22,6 +30,87 @@ lock = threading.Lock()
 changed = threading.Event()
 snapshots = {}   # host -> herdr api snapshot (or None)
 errors = {}      # host -> last error text
+VIEWED_FILE = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+                           "gil.herdr", "viewed.json")
+
+
+def load_viewed():
+    try:
+        with open(VIEWED_FILE) as f:
+            data = json.load(f)
+        return data["viewed"], data["clients"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}, {}
+
+
+# host -> {terminal id: completion_seq viewed}, host -> ["pid:starttime" of its clients]
+viewed, known_clients = load_viewed()
+
+
+def save_viewed():
+    try:
+        os.makedirs(os.path.dirname(VIEWED_FILE), exist_ok=True)
+        with open(VIEWED_FILE + ".tmp", "w") as f:
+            json.dump({"viewed": viewed, "clients": known_clients}, f)
+        os.replace(VIEWED_FILE + ".tmp", VIEWED_FILE)
+    except OSError:
+        pass
+
+
+def terminal_key(agent):
+    return agent.get("terminal_id") or agent["pane_id"]
+
+
+def process_key(pid):
+    """pid plus start time, so a reused pid is a different client."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f"{pid}:{f.read().rsplit(')', 1)[1].split()[19]}"
+    except (OSError, IndexError):
+        return None
+
+
+def active_window_pid():
+    try:
+        r = subprocess.run(["hyprctl", "activewindow", "-j"], capture_output=True, text=True, timeout=2)
+        return json.loads(r.stdout).get("pid")
+    except (subprocess.SubprocessError, OSError, ValueError, AttributeError):
+        return None
+
+
+def in_window(pid, window_pid):
+    while pid > 1:
+        if pid == window_pid:
+            return True
+        pid = parent_pid(pid)
+    return False
+
+
+def update_viewed(host, snap):
+    """Mark completions viewed the way an attached herdr client does; forget terminals that are gone. Call under lock."""
+    seen = viewed.setdefault(host, {})
+    before = (dict(seen), known_clients.get(host))
+    agents = [a for a in snap.get("agents", []) if a.get("completion_seq") is not None]
+    pids = client_pids(host)
+    clients = sorted(k for k in map(process_key, pids) if k)
+    if set(clients) - set(known_clients.get(host, [])):
+        # A newly attached client starts with everything already viewed.
+        seen.update({terminal_key(a): a["completion_seq"] for a in agents})
+    known_clients[host] = clients
+    window = active_window_pid() if pids else None
+    if window and any(in_window(pid, window) for pid in pids):
+        seen.update({terminal_key(a): a["completion_seq"] for a in agents
+                     if a.get("tab_id") == snap.get("focused_tab_id")})
+    live = {terminal_key(a) for a in snap.get("agents", [])}
+    for key in seen.keys() - live:
+        del seen[key]
+    if (seen, known_clients.get(host)) != before:
+        save_viewed()
+
+
+def needs_view(seen, agent):
+    seq = agent.get("completion_seq")
+    return seq is None or seq > seen.get(terminal_key(agent), -1)
 
 
 def herdr_processes():
@@ -59,6 +148,12 @@ def is_local_client(argv):
     return args[:2] == ["session", "attach"]
 
 
+def client_pids(host):
+    """Pids of the herdr clients attached to HOST ("local" or a remote target)."""
+    return [pid for pid, argv in herdr_processes()
+            if ((remote_target(argv) == host) if host != "local" else is_local_client(argv))]
+
+
 def remote_targets():
     return sorted({t for _, argv in herdr_processes() if (t := remote_target(argv))})
 
@@ -71,6 +166,8 @@ def set_state(host, snap, err):
     with lock:
         if snap is not None or err is not None or host in snapshots:
             snapshots[host] = snap
+        if snap:
+            update_viewed(host, snap)
         if err:
             errors[host] = err
         else:
@@ -159,6 +256,7 @@ def attention_list():
     with lock:
         items = list(snapshots.items())
         errs = sorted(errors.values())
+        seen = {h: dict(v) for h, v in viewed.items()}
     for host, snap in items:
         if not snap:
             continue
@@ -166,6 +264,9 @@ def attention_list():
         tabs = {t["tab_id"]: t for t in snap.get("tabs", [])}
         for a in snap.get("agents", []):
             if a.get("agent_status") not in SHOWN:
+                continue
+            # A done agent you already viewed is idle as far as you're concerned.
+            if a["agent_status"] == "done" and not needs_view(seen.get(host, {}), a):
                 continue
             ws = workspaces.get(a.get("workspace_id"), {})
             tab = tabs.get(a.get("tab_id"), {})
@@ -212,13 +313,11 @@ def terminal_window(host):
     """Address of the Hyprland window whose process tree holds the herdr client for HOST."""
     clients = json.loads(subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True).stdout)
     by_pid = {c["pid"]: c for c in clients}
-    for pid, argv in herdr_processes():
-        if (remote_target(argv) == host) if host != "local" else is_local_client(argv):
-            p = pid
-            while p > 1:
-                if p in by_pid:
-                    return by_pid[p]["address"]
-                p = parent_pid(p)
+    for pid in client_pids(host):
+        while pid > 1:
+            if pid in by_pid:
+                return by_pid[pid]["address"]
+            pid = parent_pid(pid)
     return None
 
 
